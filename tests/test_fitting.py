@@ -56,13 +56,16 @@ class TestCurveFunctions:
         self._check(doubleLog_Elmore, [0.1, 0.85, 90.0, 0.12, 270.0, 0.10, 0.0])
 
     def test_Zhang(self):
-        self._check(doubleLog_Zhang, [0.1, 0.85, 90.0, 0.12, 270.0, 0.10, 180.0])
+        # p = [t0, mn, mx, sos, rsp, eos, rau]  — t0 first (matches phenofit R)
+        self._check(doubleLog_Zhang, [180.0, 0.1, 0.85, 90.0, 0.12, 270.0, 0.10])
 
     def test_AG(self):
-        self._check(doubleLog_AG, [180.0, 0.1, 0.75, 80.0, 80.0, 2.0, 2.0])
+        # p = [t0, mn, mx, rsp, a3, rau, a5]  — rate params (matches phenofit R)
+        self._check(doubleLog_AG, [180.0, 0.1, 0.75, 0.04, 2.0, 0.04, 2.0])
 
     def test_Gu(self):
-        self._check(doubleLog_Gu, [0.1, 0.85, 90.0, 0.12, 270.0, 0.10, 1.0, 1.0])
+        # p = [y0, a1, a2, sos, rsp, eos, rau, c1, c2]  — 9 params (matches phenofit R)
+        self._check(doubleLog_Gu, [0.1, 0.75, 0.75, 90.0, 0.12, 270.0, 0.10, 1.0, 1.0])
 
     def test_Klos(self):
         self._check(doubleLog_Klos, [0.1, 0.0, 0.0, 90.0, 0.12, 270.0, 0.10, 1.0, 1.0])
@@ -101,7 +104,7 @@ class TestInitParams:
     def test_Elmore(self):   self._run(init_Elmore, self.y, self.t, self.w, 7)
     def test_Zhang(self):    self._run(init_Zhang, self.y, self.t, self.w, 7)
     def test_AG(self):       self._run(init_AG, self.y, self.t, self.w, 7)
-    def test_Gu(self):       self._run(init_Gu, self.y, self.t, self.w, 8)
+    def test_Gu(self):       self._run(init_Gu, self.y, self.t, self.w, 9)
     def test_Klos(self):     self._run(init_Klos, self.y, self.t, self.w, 9)
 
     def test_get_init_registry(self):

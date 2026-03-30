@@ -68,14 +68,14 @@ def doubleLog_Elmore(t: ArrayLike, p: ArrayLike) -> np.ndarray:
     """
     Elmore et al. double-logistic with linear trend.
 
-    VI(t) = mn + (mx − mn·m·t) · [1/(1+exp(−rsp(t−sos))) + 1/(1+exp(rau(t−eos))) − 1]
+    VI(t) = mn + (mx − m7·t) · [1/(1+exp(−rsp(t−sos))) − 1/(1+exp(−rau(t−eos)))]
 
     Parameters
     ----------
     t : array-like of shape (n,)
     p : array-like of shape (7,)
-        [mn, mx, sos, rsp, eos, rau, m]
-        - m : slope of linear background term
+        [mn, mx, sos, rsp, eos, rau, m7]
+        - m7 : slope of linear amplitude term (phenofit R: par[7])
 
     Returns
     -------
@@ -83,10 +83,10 @@ def doubleLog_Elmore(t: ArrayLike, p: ArrayLike) -> np.ndarray:
     """
     t = np.asarray(t, dtype=float)
     p = np.asarray(p, dtype=float)
-    mn, mx, sos, rsp, eos, rau, m = p
+    mn, mx, sos, rsp, eos, rau, m7 = p
     spring = 1.0 / (1.0 + np.exp(np.clip(-rsp * (t - sos), -_EXP_MAX, _EXP_MAX)))
-    autumn = 1.0 / (1.0 + np.exp(np.clip(rau * (t - eos), -_EXP_MAX, _EXP_MAX)))
-    return mn + (mx - mn * m * t) * (spring + autumn - 1.0)
+    autumn = 1.0 / (1.0 + np.exp(np.clip(-rau * (t - eos), -_EXP_MAX, _EXP_MAX)))
+    return mn + (mx - m7 * t) * (spring - autumn)
 
 
 # ---------------------------------------------------------------------------
@@ -104,8 +104,8 @@ def doubleLog_Zhang(t: ArrayLike, p: ArrayLike) -> np.ndarray:
     ----------
     t : array-like of shape (n,)
     p : array-like of shape (7,)
-        [mn, mx, sos, rsp, eos, rau, t0]
-        - t0 : transition day between growth and senescence phases
+        [t0, mn, mx, sos, rsp, eos, rau]
+        Param order matches phenofit R: par[1]=t0, par[2]=mn, ...
 
     Returns
     -------
@@ -118,7 +118,7 @@ def doubleLog_Zhang(t: ArrayLike, p: ArrayLike) -> np.ndarray:
     """
     t = np.asarray(t, dtype=float)
     p = np.asarray(p, dtype=float)
-    mn, mx, sos, rsp, eos, rau, t0 = p
+    t0, mn, mx, sos, rsp, eos, rau = p
     amplitude = mx - mn
     growth = mn + amplitude / (
         1.0 + np.exp(np.clip(-rsp * (t - sos), -_EXP_MAX, _EXP_MAX))
@@ -135,28 +135,19 @@ def doubleLog_Zhang(t: ArrayLike, p: ArrayLike) -> np.ndarray:
 
 def doubleLog_AG(t: ArrayLike, p: ArrayLike) -> np.ndarray:
     """
-    Asymmetric Gaussian (AG) double-logistic curve (TIMESAT formulation).
+    Asymmetric Gaussian (AG) curve (TIMESAT / phenofit formulation).
 
-    VI(t) = c1 + c2 · exp(−|t−t0|^a / b)   (left or right half)
+    Growth   (t ≤ t0): VI = mn + (mx−mn) · exp(−((t0−t)·rsp)^a3)
+    Senescence (t > t0): VI = mn + (mx−mn) · exp(−((t−t0)·rau)^a5)
 
     Parameters
     ----------
     t : array-like of shape (n,)
-    p : array-like of shape (6,)
-        [t0, c1, c2, a1, b1, a2, b2] — but here we follow phenofit's 6-param:
-        [t0, c1, c2, b1, b2, a]
-        Reformulation used in phenofit (R) doubleLog.AG:
-        [t0, a0, a1, a2, a3, a4, a5]  (7 params)
-        We use a simplified version consistent with the R source:
-
-        p = [t0, c1, c2, b_left, b_right, a_left, a_right]  (7 params)
-        - t0      : peak location (DOY)
-        - c1      : background value
-        - c2      : amplitude (mx - mn)
-        - b_left  : width of spring limb (> 0)
-        - b_right : width of autumn limb (> 0)
-        - a_left  : shape exponent for spring (> 0)
-        - a_right : shape exponent for autumn (> 0)
+    p : array-like of shape (7,)
+        [t0, mn, mx, rsp, a3, rau, a5]
+        Param order matches phenofit R: par[1]=t0, par[2]=mn, par[3]=mx,
+        par[4]=rsp (spring rate), par[5]=a3 (spring shape exponent),
+        par[6]=rau (autumn rate), par[7]=a5 (autumn shape exponent).
 
     Returns
     -------
@@ -169,15 +160,18 @@ def doubleLog_AG(t: ArrayLike, p: ArrayLike) -> np.ndarray:
     """
     t = np.asarray(t, dtype=float)
     p = np.asarray(p, dtype=float)
-    t0, c1, c2, b_left, b_right, a_left, a_right = p
+    t0, mn, mx, rsp, a3, rau, a5 = p
+    amplitude = mx - mn
 
     left_mask = t <= t0
-    z = np.where(
-        left_mask,
-        c1 + c2 * np.exp(-np.abs((t - t0) / np.maximum(b_left, 1e-6)) ** a_left),
-        c1 + c2 * np.exp(-np.abs((t - t0) / np.maximum(b_right, 1e-6)) ** a_right),
+    result = np.empty_like(t)
+    result[left_mask] = mn + amplitude * np.exp(
+        -np.clip((t0 - t[left_mask]) * rsp, 0.0, _EXP_MAX) ** a3
     )
-    return z
+    result[~left_mask] = mn + amplitude * np.exp(
+        -np.clip((t[~left_mask] - t0) * rau, 0.0, _EXP_MAX) ** a5
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -188,17 +182,18 @@ def doubleLog_Gu(t: ArrayLike, p: ArrayLike) -> np.ndarray:
     """
     Gu et al. power-law double-logistic curve.
 
-    Extends Beck by replacing logistic rates with power-law exponents:
-    VI = mn + (mx−mn) · [(1/(1+exp(−rsp(t−sos))))^b1
-                         + (1/(1+exp( rau(t−eos))))^b2 − 1]
+    VI(t) = y0 + a1·L(rsp(t−sos))^c1 − a2·L(rau(t−eos))^c2
+    where L(x) = 1/(1+exp(−x))
 
     Parameters
     ----------
     t : array-like of shape (n,)
-    p : array-like of shape (8,)
-        [mn, mx, sos, rsp, eos, rau, b1, b2]
-        - b1 : spring power-law exponent
-        - b2 : autumn power-law exponent
+    p : array-like of shape (9,)
+        [y0, a1, a2, sos, rsp, eos, rau, c1, c2]
+        Param order matches phenofit R: par[1]=y0 (background),
+        par[2]=a1 (spring amplitude), par[3]=a2 (autumn amplitude),
+        par[4]=sos, par[5]=rsp, par[6]=eos, par[7]=rau,
+        par[8]=c1 (spring power), par[9]=c2 (autumn power).
 
     Returns
     -------
@@ -212,15 +207,10 @@ def doubleLog_Gu(t: ArrayLike, p: ArrayLike) -> np.ndarray:
     """
     t = np.asarray(t, dtype=float)
     p = np.asarray(p, dtype=float)
-    mn, mx, sos, rsp, eos, rau, b1, b2 = p
-    amplitude = mx - mn
-    spring = (
-        1.0 / (1.0 + np.exp(np.clip(-rsp * (t - sos), -_EXP_MAX, _EXP_MAX)))
-    ) ** b1
-    autumn = (
-        1.0 / (1.0 + np.exp(np.clip(rau * (t - eos), -_EXP_MAX, _EXP_MAX)))
-    ) ** b2
-    return mn + amplitude * (spring + autumn - 1.0)
+    y0, a1, a2, sos, rsp, eos, rau, c1, c2 = p
+    L_spring = 1.0 / (1.0 + np.exp(np.clip(-rsp * (t - sos), -_EXP_MAX, _EXP_MAX)))
+    L_autumn = 1.0 / (1.0 + np.exp(np.clip(-rau * (t - eos), -_EXP_MAX, _EXP_MAX)))
+    return y0 + a1 * L_spring**c1 - a2 * L_autumn**c2
 
 
 # ---------------------------------------------------------------------------
