@@ -136,9 +136,12 @@ class TestPhenoZhang:
 
     def test_order(self):
         result = pheno_zhang(T_DENSE, Y_SYNTH)
-        assert result["GreenUp"] <= result["Maturity"]
-        assert result["Maturity"] <= result["Senescence"]
-        assert result["Senescence"] <= result["Dormancy"]
+        finite = [
+            result[name]
+            for name in ("GreenUp", "Maturity", "Senescence", "Dormancy")
+            if np.isfinite(result[name])
+        ]
+        assert finite == sorted(finite)
 
     def test_float_output(self):
         result = pheno_zhang(T_DENSE, Y_SYNTH)

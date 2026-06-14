@@ -77,7 +77,7 @@ for (lam in c(10, 100, 1000)) {
 # --------------------------------------------------------------------------
 # 3. curvefit — params, fitted values, GOF
 # --------------------------------------------------------------------------
-methods <- c("Beck", "Elmore", "Zhang", "AG", "Gu")
+methods <- c("Beck", "Elmore", "Zhang", "AG", "Gu", "Klos")
 fit     <- curvefit(y_noisy, t = t, tout = tout, methods = methods, w = w)
 
 # Params

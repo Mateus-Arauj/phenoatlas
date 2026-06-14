@@ -33,7 +33,7 @@ def gof(
     -------
     dict with keys:
         'RMSE'  : Root Mean Squared Error
-        'R2'    : Coefficient of determination (can be negative for bad fits)
+        'R2'    : Squared Pearson correlation, matching phenofit
         'NSE'   : Nash–Sutcliffe Efficiency
         'bias'  : Mean bias (pred − obs)
         'n'     : Number of observations used (after weight filtering)
@@ -72,11 +72,20 @@ def gof(
     ss_tot = np.dot(w, (y_obs - obs_mean) ** 2)
 
     rmse = np.sqrt(ss_res / w_sum)
-    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
-    nse = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan  # same formula
+    if ss_tot > 0 and np.std(y_pred) > 0:
+        r2 = float(np.corrcoef(y_obs, y_pred)[0, 1] ** 2)
+    else:
+        r2 = np.nan
+    nse = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
     bias = np.dot(w, residuals) / w_sum
 
-    return {"RMSE": float(rmse), "R2": float(r2), "NSE": float(nse), "bias": float(bias), "n": n}
+    return {
+        "RMSE": float(rmse),
+        "R2": float(r2),
+        "NSE": float(nse),
+        "bias": float(bias),
+        "n": n,
+    }
 
 
 def r2_sign(y_obs: ArrayLike, y_pred: ArrayLike, w: ArrayLike | None = None) -> float:

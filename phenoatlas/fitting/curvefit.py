@@ -13,14 +13,17 @@ from numpy.typing import ArrayLike
 
 from phenoatlas.fitting.curves import CURVE_REGISTRY
 from phenoatlas.fitting.init_params import get_init
-from phenoatlas.fitting.optimizer import i_optim, make_residual_fun
+from phenoatlas.fitting.optimizer import i_optim, i_optim_lsq, make_residual_fun
+from phenoatlas.smoothing.weights import get_wfun
 from phenoatlas.utils.stats import gof as compute_gof
 from phenoatlas.utils.validation import check_input
 
 FittingMethod = Literal["AG", "Beck", "Elmore", "Gu", "Klos", "Zhang"]
 
-# Default methods — Klos excluded by default (slow and unstable)
-_DEFAULT_METHODS: list[FittingMethod] = ["Beck", "Elmore", "AG", "Gu", "Zhang"]
+# Match phenofit's default method set and order.
+_DEFAULT_METHODS: list[FittingMethod] = [
+    "AG", "Beck", "Elmore", "Gu", "Klos", "Zhang",
+]
 
 # All phenophase names (mirrors phenofit R)
 PHENOPHASE_NAMES = [
@@ -135,6 +138,8 @@ def curvefit(
     ylu: tuple[float, float] | None = None,
     nptperyear: int = 23,
     opt_method: str = "L-BFGS-B",
+    iters: int = 2,
+    wfun: str = "wTSM",
 ) -> FittingResult:
     """
     Fit double-logistic curve(s) to a single growing season.
@@ -148,10 +153,10 @@ def curvefit(
     t : array-like of shape (n,) or None
         Time points (DOY or numeric index). Defaults to 0..n-1.
     tout : array-like or None
-        Dense output time points for smooth curve. Defaults to
-        np.linspace(t.min(), t.max(), 100).
+        Output time points for the fitted curve. Defaults to ``t``, matching
+        phenofit.
     methods : list of str or None
-        Fitting methods. Defaults to ['Beck', 'Elmore', 'AG', 'Gu', 'Zhang'].
+        Fitting methods. Defaults to all six phenofit methods.
         Available: 'AG', 'Beck', 'Elmore', 'Gu', 'Klos', 'Zhang'.
     w : array-like of shape (n,) or None
         Observation weights [0, 1]. Defaults to 1 for finite y, 0 for NaN.
@@ -161,6 +166,10 @@ def curvefit(
         Number of observations per year (metadata only in this context).
     opt_method : str
         Optimizer: 'L-BFGS-B' (default), 'Nelder-Mead', 'BFGS'.
+    iters : int
+        Number of fit/reweight iterations. phenofit defaults to 2.
+    wfun : str
+        Iterative weight function registered in phenoatlas.smoothing.weights.
 
     Returns
     -------
@@ -180,16 +189,22 @@ def curvefit(
     if methods is None:
         methods = _DEFAULT_METHODS
 
+    original_valid = np.isfinite(np.asarray(y, dtype=float))
     y_arr, t_arr, w_arr = check_input(y, t, w, ylu=ylu, nptperyear=nptperyear)
-    n = len(y_arr)
 
     if tout is None:
-        tout_arr = np.linspace(t_arr.min(), t_arr.max(), max(100, n))
+        tout_arr = t_arr.copy()
     else:
         tout_arr = np.asarray(tout, dtype=float)
 
     data = pd.DataFrame({"t": t_arr, "y": y_arr, "w": w_arr})
     fitted_models: dict[str, dict] = {}
+    fit_ylu = (
+        (float(np.nanmin(y_arr)), float(np.nanmax(y_arr)))
+        if ylu is None
+        else ylu
+    )
+    update_w = get_wfun(wfun)
 
     for method in methods:
         curve_fn = CURVE_REGISTRY.get(method)
@@ -200,26 +215,65 @@ def curvefit(
         except ValueError:
             continue
 
+        init = None
         try:
             init = init_fn(y_arr, t_arr, w_arr)
             obj_fn = make_residual_fun(curve_fn, y_arr, t_arr, w_arr)
-            result = i_optim(
-                obj_fn,
-                init["p0"],
-                init["lower"],
-                init["upper"],
-                method=opt_method,
+            prior = init.get("prior", init["p0"])
+            w_cur = w_arr.copy()
+            fitted_iters: list[np.ndarray] = []
+            weight_iters: list[np.ndarray] = []
+            result = None
+
+            for _ in range(max(1, iters)):
+                weight_iters.append(w_cur.copy())
+                obj_fn = make_residual_fun(curve_fn, y_arr, t_arr, w_cur)
+                if method == "Klos":
+                    result = i_optim_lsq(
+                        curve_fn,
+                        y_arr,
+                        t_arr,
+                        w_cur,
+                        prior,
+                        init["lower"],
+                        init["upper"],
+                    )
+                else:
+                    result = i_optim(
+                        obj_fn,
+                        prior,
+                        init["lower"],
+                        init["upper"],
+                        method=opt_method,
+                    )
+                param = result.x
+                fitted_iter = curve_fn(tout_arr, param)
+                fitted_iter = np.maximum(fitted_iter, fit_ylu[0])
+                fitted_iters.append(fitted_iter)
+
+                y_fit_obs = curve_fn(t_arr, param)
+                w_cur = update_w(y_arr, y_fit_obs, w_cur)
+                prior_2d = np.atleast_2d(prior)
+                prior = np.unique(
+                    np.vstack([prior_2d[:-1], param]),
+                    axis=0,
+                )
+
+            fitted = fitted_iters[-1]
+            y_fit_obs = np.maximum(curve_fn(t_arr, param), fit_ylu[0])
+            # phenofit's get_GOF() evaluates all finite observations, even
+            # those excluded from optimization by zero weights.
+            gof_stats = compute_gof(
+                y_arr[original_valid],
+                y_fit_obs[original_valid],
             )
-            param = result.x
-            fitted = curve_fn(tout_arr, param)
-            # GOF evaluated at original observation points
-            y_fit_obs = curve_fn(t_arr, param)
-            gof_stats = compute_gof(y_arr, y_fit_obs, w_arr)
         except Exception as exc:
-            param = init["p0"] if "init" in dir() else np.full(6, np.nan)
+            param = init["p0"] if init is not None else np.full(6, np.nan)
             fitted = np.full(len(tout_arr), np.nan)
             gof_stats = {"RMSE": np.nan, "R2": np.nan, "NSE": np.nan,
                          "bias": np.nan, "n": 0}
+            fitted_iters = []
+            weight_iters = []
             result_success = False
             result_message = str(exc)
         else:
@@ -232,6 +286,8 @@ def curvefit(
             "gof": gof_stats,
             "success": result_success,
             "message": result_message,
+            "fitted_iters": fitted_iters,
+            "weight_iters": weight_iters,
         }
 
     return FittingResult(data=data, tout=tout_arr, models=fitted_models)
@@ -252,6 +308,8 @@ def curvefits(
     ylu: tuple[float, float] | None = None,
     nptperyear: int = 23,
     opt_method: str = "L-BFGS-B",
+    iters: int = 2,
+    wfun: str = "wTSM",
 ) -> dict[str, FittingResult]:
     """
     Batch curve fitting across multiple growing seasons.
@@ -300,6 +358,8 @@ def curvefits(
             ylu=ylu,
             nptperyear=nptperyear,
             opt_method=opt_method,
+            iters=iters,
+            wfun=wfun,
         )
 
     return results

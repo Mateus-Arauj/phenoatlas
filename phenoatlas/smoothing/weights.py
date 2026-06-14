@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Callable
 
 import numpy as np
-from numpy.typing import ArrayLike
 
 # Type alias
 WeightFn = Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray]
@@ -21,15 +20,15 @@ def wTSM(
     z: np.ndarray,
     w: np.ndarray,
     *,
-    c: float = 6.0,
+    wfact: float = 0.5,
 ) -> np.ndarray:
     """
     Asymmetric weight update — Trust Smoothed Mean (TSM).
 
-    Observations *above* the smoothed curve (potential cloud contamination
-    in vegetation indices is usually negative, i.e. values are too low) keep
-    their original weight. Observations *below* the curve are down-weighted
-    using a bisquare-like kernel.
+    Observations above the fitted curve retain their weight. Observations
+    below it are multiplied by ``wfact``. This is the dominant behavior of
+    phenofit's compiled rcpp_wTSM routine and preserves its asymmetric
+    treatment of negative vegetation-index contamination.
 
     Port of wTSM() from phenofit (R).
 
@@ -41,31 +40,15 @@ def wTSM(
         Current smoothed values.
     w : np.ndarray of shape (n,)
         Previous weights.
-    c : float
-        Tuning constant (default 6, matching phenofit).
+    wfact : float
+        Multiplicative penalty for observations below the fit.
 
     Returns
     -------
     np.ndarray of shape (n,)
         Updated weights in [0, 1].
     """
-    residuals = y - z
-    # Robust scale estimate (MAD-based, only positive residuals)
-    pos = residuals[residuals > 0]
-    if pos.size == 0:
-        return w.copy()
-    sigma = np.median(np.abs(pos)) / 0.6745  # MAD → std estimate
-    if sigma == 0:
-        return w.copy()
-
-    u = residuals / (c * sigma)
-    # Bisquare kernel for negative residuals (values below smoother)
-    w_new = np.where(
-        residuals >= 0,
-        w,  # keep original weight for observations above curve
-        w * np.clip((1 - u**2) ** 2, 0.0, 1.0),
-    )
-    return w_new.astype(float)
+    return np.where(y >= z, w, w * wfact).astype(float)
 
 
 def wBisquare(

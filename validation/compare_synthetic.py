@@ -160,8 +160,11 @@ def print_gof_table(cmp: pd.DataFrame) -> None:
         dr2     = f"{row['ΔR2']:.4f}"     if pd.notna(row.get('ΔR2'))     else "   NA"
 
         flag = ""
-        if pd.notna(row.get('ΔRMSE')) and row['ΔRMSE'] > 0.05:
-            flag = " ← large diff"
+        if (
+            pd.notna(row.get("RMSE_py"))
+            and row["RMSE_py"] > row["RMSE_r"] + 0.001
+        ):
+            flag = " <- Python fit is worse"
         print(f"{str(row['scenario']):<22} {str(row['meth']):<8} "
               f"{rmse_py:>8} {rmse_r:>8} {drmse:>8} "
               f"{r2_py:>7} {r2_r:>7} {dr2:>7}{flag}")
@@ -188,7 +191,10 @@ def print_pheno_table(cmp: pd.DataFrame) -> None:
                 py_s  = f"{float(py_v):8.1f}"
                 r_s   = f"{float(r_v):8.1f}"
                 d_s   = f"{float(delta):7.1f}"
-                status = ("✓" if delta <= 5 else "!" if delta <= 15 else "✗") if pd.notna(delta) else "NA"
+                if pd.isna(delta):
+                    status = "NA"
+                else:
+                    status = "OK" if delta <= 5 else "!" if delta <= 15 else "X"
             except (TypeError, ValueError):
                 py_s = r_s = d_s = "      NA"
                 status = "NA"
@@ -244,11 +250,14 @@ def main() -> None:
                    float_format="%.4f")
     cmp_pheno.to_csv(os.path.join(OUT_DIR, "comparison_pheno.csv"), index=False,
                      float_format="%.1f")
-    print(f"\nSaved: validation/comparison_gof.csv")
-    print(f"Saved: validation/comparison_pheno.csv")
+    print("\nSaved: validation/comparison_gof.csv")
+    print("Saved: validation/comparison_pheno.csv")
 
     # 6. Summary
-    ok_rmse = (cmp_gof["ΔRMSE"] < 0.05).sum()
+    ok_rmse = (
+        (cmp_gof["RMSE_py"] <= cmp_gof["RMSE_r"] + 0.001)
+        & (cmp_gof["R2_py"] >= cmp_gof["R2_r"] - 0.002)
+    ).sum()
     total   = cmp_gof["ΔRMSE"].notna().sum()
     ok_doy  = sum(
         1 for col in ["ΔTRS2.SOS", "ΔTRS2.EOS", "ΔTRS5.SOS", "ΔTRS5.EOS",
@@ -261,9 +270,12 @@ def main() -> None:
         for v in cmp_pheno[col] if pd.notna(v)
     )
     print(f"\n{'='*50}")
-    print(f"SUMMARY")
-    print(f"  GOF: {ok_rmse}/{total} methods within ΔRMSE < 0.05")
-    print(f"  DOY: {ok_doy}/{total_doy} phenodates within ±5 days")
+    print("SUMMARY")
+    print(
+        f"  GOF: {ok_rmse}/{total} methods no worse than "
+        "R +0.001 RMSE / -0.002 R2"
+    )
+    print(f"  DOY: {ok_doy}/{total_doy} phenodates within +/-5 days")
     print(f"{'='*50}")
 
 

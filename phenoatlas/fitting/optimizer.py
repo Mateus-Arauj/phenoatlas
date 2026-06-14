@@ -3,16 +3,15 @@ Optimization wrappers for curve fitting.
 
 Port of optim_pheno.R / I_optim() from phenofit (R).
 
-Strategy: try primary method first, fall back to Nelder-Mead when it fails,
-matching phenofit's multi-start, multi-method robustness.
+Strategy: optimize every supplied starting point and retain the lowest
+objective, matching phenofit's multi-start I_optim() behavior.
 """
 from __future__ import annotations
 
 from typing import Callable
 
 import numpy as np
-from scipy.optimize import minimize, OptimizeResult, Bounds
-
+from scipy.optimize import OptimizeResult, least_squares, minimize
 
 # Mapping from phenofit method names to scipy method names
 _METHOD_MAP = {
@@ -34,15 +33,15 @@ def i_optim(
     *,
     method: str = "L-BFGS-B",
     tol: float = 1e-8,
-    maxiter: int = 500,
+    maxiter: int = 1000,
 ) -> OptimizeResult:
     """
     Unified optimization interface for double-logistic curve fitting.
 
     Port of I_optim() from phenofit (R).
 
-    Tries the requested method first. If it fails to improve over p0,
-    falls back to Nelder-Mead (bounds enforced via penalty).
+    ``p0`` may be a single parameter vector or a matrix whose rows are
+    independent starting points.
 
     Parameters
     ----------
@@ -71,41 +70,56 @@ def i_optim(
     lower = np.asarray(lower, dtype=float)
     upper = np.asarray(upper, dtype=float)
 
-    # Clip initial guess to feasible region
-    p0 = np.clip(np.asarray(p0, dtype=float), lower, upper)
-    f0 = fun(p0)
-
+    starts = np.asarray(p0, dtype=float)
+    if starts.ndim == 1:
+        starts = starts[None, :]
+    starts = np.clip(starts, lower, upper)
     scipy_method = _METHOD_MAP.get(method, method)
-    options = {"maxiter": maxiter}
+    bounds = list(zip(lower.tolist(), upper.tolist()))
+    options = {
+        "maxiter": maxiter,
+        "ftol": 1e-14,
+        "gtol": tol,
+        "maxls": 50,
+    }
 
-    if scipy_method in _BOUNDED_METHODS:
-        bounds = list(zip(lower.tolist(), upper.tolist()))
-        result = minimize(fun, p0, method=scipy_method, bounds=bounds,
-                          tol=tol, options=options)
-    else:
-        # For unbounded methods, wrap with penalty to respect bounds
-        def penalized(p: np.ndarray) -> float:
-            penalty = np.sum(
-                np.maximum(0.0, lower - p) ** 2 + np.maximum(0.0, p - upper) ** 2
+    results: list[OptimizeResult] = []
+    for start in starts:
+        if scipy_method in _BOUNDED_METHODS:
+            result = minimize(
+                fun,
+                start,
+                method=scipy_method,
+                bounds=bounds,
+                options=options,
             )
-            return fun(np.clip(p, lower, upper)) + 1e6 * penalty
+        else:
+            def penalized(p: np.ndarray) -> float:
+                below = np.maximum(0.0, lower - p)
+                above = np.maximum(0.0, p - upper)
+                penalty = np.sum(
+                    np.where(np.isfinite(below), below**2, 0.0)
+                    + np.where(np.isfinite(above), above**2, 0.0)
+                )
+                return fun(np.clip(p, lower, upper)) + 1e6 * penalty
 
-        result = minimize(penalized, p0, method=scipy_method,
-                          tol=tol, options=options)
+            method_options = {"maxiter": maxiter}
+            result = minimize(
+                penalized,
+                start,
+                method=scipy_method,
+                tol=tol,
+                options=method_options,
+            )
 
-    # Clip result to bounds (numerical noise can push slightly outside)
-    result.x = np.clip(result.x, lower, upper)
+        result.x = np.clip(result.x, lower, upper)
+        result.fun = fun(result.x)
+        results.append(result)
 
-    # Fallback: if primary method didn't improve, try Nelder-Mead
-    if not result.success or result.fun >= f0:
-        bounds = list(zip(lower.tolist(), upper.tolist()))
-        result_nm = minimize(fun, p0, method="L-BFGS-B", bounds=bounds,
-                             tol=tol, options=options)
-        result_nm.x = np.clip(result_nm.x, lower, upper)
-        if result_nm.fun < result.fun:
-            result = result_nm
-
-    return result
+    finite = [result for result in results if np.isfinite(result.fun)]
+    if finite:
+        return min(finite, key=lambda result: result.fun)
+    return results[0]
 
 
 def make_residual_fun(
@@ -132,9 +146,57 @@ def make_residual_fun(
     def fun(p: np.ndarray) -> float:
         try:
             y_pred = curve_fn(t, p)
+            if not np.all(np.isfinite(y_pred)):
+                return 1e12
             residuals = y - y_pred
-            return float(np.dot(w, residuals**2))
+            value = float(np.dot(w, residuals**2))
+            return value if np.isfinite(value) else 1e12
         except Exception:
             return 1e12
 
     return fun
+
+
+def i_optim_lsq(
+    curve_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    y: np.ndarray,
+    t: np.ndarray,
+    w: np.ndarray,
+    prior: np.ndarray,
+    lower: np.ndarray,
+    upper: np.ndarray,
+    *,
+    max_nfev: int = 10000,
+) -> OptimizeResult:
+    """Multi-start nonlinear least squares for the 13-parameter Klos model."""
+    starts = np.atleast_2d(np.asarray(prior, dtype=float))
+    lower = np.asarray(lower, dtype=float)
+    upper = np.asarray(upper, dtype=float)
+    sqrt_w = np.sqrt(np.asarray(w, dtype=float))
+    results: list[OptimizeResult] = []
+
+    def residuals(param: np.ndarray) -> np.ndarray:
+        predicted = curve_fn(t, param)
+        if not np.all(np.isfinite(predicted)):
+            return np.full_like(y, 100.0)
+        result = sqrt_w * (y - predicted)
+        if not np.all(np.isfinite(result)):
+            return np.full_like(y, 100.0)
+        return result
+
+    for start in starts:
+        result = least_squares(
+            residuals,
+            np.clip(start, lower, upper),
+            bounds=(lower, upper),
+            method="trf",
+            x_scale="jac",
+            max_nfev=max_nfev,
+            ftol=1e-12,
+            xtol=1e-12,
+            gtol=1e-12,
+        )
+        result.fun = float(np.dot(result.fun, result.fun))
+        results.append(result)
+
+    return min(results, key=lambda result: result.fun)

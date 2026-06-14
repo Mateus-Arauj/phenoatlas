@@ -1,213 +1,225 @@
 """
 Parameter initializers and bounds for each double-logistic fitting method.
 
-Port of init_*.R from phenofit (R).
-
-Each initializer returns a dict with:
-    'p0'    : np.ndarray — initial parameter guess
-    'lower' : np.ndarray — lower bounds
-    'upper' : np.ndarray — upper bounds
-    'names' : list[str]  — parameter names (for diagnostics)
+Direct port of phenofit's init_param() and init_*() functions.  Each
+initializer exposes both the first starting point as ``p0`` for backward
+compatibility and the complete multi-start matrix as ``prior``.
 """
 from __future__ import annotations
 
 import numpy as np
 
 
-def _season_stats(y: np.ndarray, t: np.ndarray, w: np.ndarray) -> dict:
-    """
-    Derive basic season statistics used by all initializers.
+def _init_param(y: np.ndarray, t: np.ndarray, w: np.ndarray) -> dict:
+    """Build the shared statistics used by phenofit's model initializers."""
+    y = np.asarray(y, dtype=float)
+    t = np.asarray(t, dtype=float)
+    w = np.asarray(w, dtype=float)
 
-    Parameters
-    ----------
-    y, t, w : np.ndarray of shape (n,)
+    w_min = 0.5
+    if np.mean(w >= w_min) < 0.4:
+        w_min = 0.0
 
-    Returns
-    -------
-    dict with keys: mn, mx, t_mn, t_mx, t_mid, amplitude, t_min, t_max, n
-    """
-    # Use weighted observations only
-    mask = w > 0
-    if mask.sum() < 2:
-        mask = np.ones(len(y), dtype=bool)
+    valid = (w >= w_min) & np.isfinite(y)
+    if not np.any(valid):
+        valid = np.isfinite(y)
 
-    y_m = y[mask]
-    t_m = t[mask]
+    mx = float(np.max(y[valid]))
+    mn = float(np.min(y[valid]))
+    doy_mx = float(t[np.nanargmax(y)])
+    doy = np.array([(doy_mx + t[0]) / 2.0, (t[-1] + doy_mx) / 2.0])
+    t1 = (doy_mx - doy[0]) / 3.0
+    t2 = (doy[1] - doy_mx) / 3.0
+    amplitude = mx - mn
+    delta_y = amplitude * 0.1
+    half = (float(np.max(t)) - float(np.min(t))) / 2.0
+    delta_t = half / 4.0
+    k = 4.0 / half * 2.67
 
-    mn = float(np.percentile(y_m, 10))   # background ~ 10th pct
-    mx = float(np.percentile(y_m, 90))   # peak ~ 90th pct
-    t_mx = float(t_m[np.argmax(y_m)])    # time of approximate peak
-    t_mn = float(t_m[np.argmin(y_m)])    # time of approximate minimum
-
-    # Mid-season split
-    t_mid = float(0.5 * (t_m[0] + t_m[-1]))
-
+    limits = {
+        "t0": (doy_mx - delta_t, doy_mx + delta_t),
+        "mn": (mn - delta_y, mn + delta_y),
+        "mx": (mx - 2.0 * delta_y, mx + 2.0 * delta_y),
+        "r": (k / 1.2, k * 5.0),
+        "sos": (float(np.min(t)), min(doy_mx + delta_t, float(np.max(t)))),
+        "eos": (doy_mx - delta_t, float(np.max(t))),
+    }
     return {
         "mn": mn,
         "mx": mx,
-        "t_mx": t_mx,
-        "t_mn": t_mn,
-        "t_mid": t_mid,
-        "amplitude": max(mx - mn, 0.05),
-        "t_min": float(t_m.min()),
-        "t_max": float(t_m.max()),
-        "n": int(mask.sum()),
+        "amplitude": amplitude,
+        "doy": doy,
+        "doy_mx": doy_mx,
+        "t1": t1,
+        "t2": t2,
+        "k": k,
+        "half": half,
+        "limits": limits,
     }
+
+
+def _result(
+    prior: np.ndarray,
+    lower: np.ndarray,
+    upper: np.ndarray,
+    names: list[str],
+) -> dict:
+    prior = np.asarray(prior, dtype=float)
+    if prior.ndim == 1:
+        prior = prior[None, :]
+    return {
+        "p0": prior[0].copy(),
+        "prior": prior,
+        "lower": np.asarray(lower, dtype=float),
+        "upper": np.asarray(upper, dtype=float),
+        "names": names,
+    }
+
+
+def _bounds(e: dict, keys: list[str]) -> tuple[np.ndarray, np.ndarray]:
+    lower = np.array([e["limits"][key][0] for key in keys], dtype=float)
+    upper = np.array([e["limits"][key][1] for key in keys], dtype=float)
+    return lower, upper
 
 
 def init_Beck(y: np.ndarray, t: np.ndarray, w: np.ndarray) -> dict:
-    """
-    Initial parameters and bounds for Beck double-logistic (6 params).
-
-    p = [mn, mx, sos, rsp, eos, rau]
-    """
-    s = _season_stats(y, t, w)
-    t_range = s["t_max"] - s["t_min"]
-
-    sos0 = s["t_min"] + 0.25 * t_range
-    eos0 = s["t_min"] + 0.75 * t_range
-
-    p0 = np.array([s["mn"], s["mx"], sos0, 0.1, eos0, 0.1])
-    lower = np.array([s["mn"] - 0.2, s["mn"], s["t_min"], 0.001, sos0, 0.001])
-    upper = np.array([s["mx"], s["mx"] + 0.2, eos0, 1.0, s["t_max"], 1.0])
-
-    return {
-        "p0": p0,
-        "lower": lower,
-        "upper": upper,
-        "names": ["mn", "mx", "sos", "rsp", "eos", "rau"],
-    }
+    """Initial values for Beck: [mn, mx, sos, rsp, eos, rau]."""
+    e = _init_param(y, t, w)
+    mn, mx, doy, k = e["mn"], e["mx"], e["doy"], e["k"]
+    prior = np.array([
+        [mn, mx, doy[0], k, doy[1], k],
+        [mn, mx, doy[0] + e["t1"], 2 * k, doy[1] - e["t2"], 2 * k],
+    ])
+    lower, upper = _bounds(e, ["mn", "mx", "sos", "r", "eos", "r"])
+    return _result(
+        prior, lower, upper, ["mn", "mx", "sos", "rsp", "eos", "rau"]
+    )
 
 
 def init_Elmore(y: np.ndarray, t: np.ndarray, w: np.ndarray) -> dict:
-    """
-    Initial parameters and bounds for Elmore double-logistic (7 params).
-
-    p = [mn, mx, sos, rsp, eos, rau, m7]
-    """
-    base = init_Beck(y, t, w)
-    p0 = np.append(base["p0"], 0.0)         # m7 = 0 (no linear trend)
-    lower = np.append(base["lower"], -0.01)
-    upper = np.append(base["upper"], 0.01)
-    return {
-        "p0": p0,
-        "lower": lower,
-        "upper": upper,
-        "names": ["mn", "mx", "sos", "rsp", "eos", "rau", "m7"],
-    }
+    """Initial values for Elmore: [mn, mx, sos, rsp, eos, rau, m7]."""
+    e = _init_param(y, t, w)
+    mn, mx, doy, k = e["mn"], e["mx"], e["doy"], e["k"]
+    prior = np.array([
+        [
+            mn, mx - mn, doy[0] + e["t1"], 2.5 * k,
+            doy[1] - e["t2"], 2.5 * k, 0.002,
+        ],
+        [
+            mn, mx - mn, doy[0] - e["t1"], 0.25 * k,
+            doy[1] + e["t2"], 0.25 * k, 0.001,
+        ],
+    ])
+    lower, upper = _bounds(e, ["mn", "mx", "sos", "r", "eos", "r"])
+    return _result(
+        prior,
+        np.append(lower, 0.0),
+        np.append(upper, 1.0),
+        ["mn", "mx", "sos", "rsp", "eos", "rau", "m7"],
+    )
 
 
 def init_Zhang(y: np.ndarray, t: np.ndarray, w: np.ndarray) -> dict:
-    """
-    Initial parameters and bounds for Zhang piecewise double-logistic (7 params).
-
-    p = [t0, mn, mx, sos, rsp, eos, rau]   — t0 first, matching phenofit R.
-    """
-    base = init_Beck(y, t, w)
-    s = _season_stats(y, t, w)
-    t0_0 = s["t_mx"]  # transition near peak
-
-    beck_p0 = base["p0"]    # [mn, mx, sos, rsp, eos, rau]
-    beck_lo = base["lower"]
-    beck_hi = base["upper"]
-
-    sos0, eos0 = beck_p0[2], beck_p0[4]
-
-    p0 = np.array([t0_0, beck_p0[0], beck_p0[1], beck_p0[2],
-                   beck_p0[3], beck_p0[4], beck_p0[5]])
-    lower = np.array([sos0, beck_lo[0], beck_lo[1], beck_lo[2],
-                      beck_lo[3], beck_lo[4], beck_lo[5]])
-    upper = np.array([eos0, beck_hi[0], beck_hi[1], beck_hi[2],
-                      beck_hi[3], beck_hi[4], beck_hi[5]])
-    return {
-        "p0": p0,
-        "lower": lower,
-        "upper": upper,
-        "names": ["t0", "mn", "mx", "sos", "rsp", "eos", "rau"],
-    }
+    """Initial values for Zhang: [t0, mn, mx, sos, rsp, eos, rau]."""
+    e = _init_param(y, t, w)
+    mn, mx, doy, k, peak = (
+        e["mn"], e["mx"], e["doy"], e["k"], e["doy_mx"]
+    )
+    prior = np.array([
+        [peak, mn, mx, doy[0], k, doy[1], k],
+        [
+            peak, mn, mx, doy[0] + e["t1"], 2 * k,
+            doy[1] - e["t1"], 2 * k,
+        ],
+        [peak, mn, mx, doy[0] - e["t1"], k, doy[1] + e["t2"], k],
+    ])
+    lower, upper = _bounds(
+        e, ["t0", "mn", "mx", "sos", "r", "eos", "r"]
+    )
+    return _result(
+        prior,
+        lower,
+        upper,
+        ["t0", "mn", "mx", "sos", "rsp", "eos", "rau"],
+    )
 
 
 def init_AG(y: np.ndarray, t: np.ndarray, w: np.ndarray) -> dict:
-    """
-    Initial parameters and bounds for Asymmetric Gaussian (7 params).
-
-    p = [t0, mn, mx, rsp, a3, rau, a5]   — rate params, matching phenofit R.
-    """
-    s = _season_stats(y, t, w)
-    t_range = s["t_max"] - s["t_min"]
-    rate0 = 4.0 / max(t_range, 1.0)   # approximate rate ~ 4 half-widths per range
-
-    p0 = np.array([
-        s["t_mx"],        # t0: peak location
-        s["mn"],          # mn: background
-        s["mx"],          # mx: maximum
-        rate0,            # rsp: spring rate
-        2.0,              # a3: spring shape exponent
-        rate0,            # rau: autumn rate
-        2.0,              # a5: autumn shape exponent
+    """Initial values for AG: [t0, mn, mx, rsp, a3, rau, a5]."""
+    e = _init_param(y, t, w)
+    peak, mn, mx, half = e["doy_mx"], e["mn"], e["mx"], e["half"]
+    prior = np.array([
+        [peak, mn, mx, 1 / half, 2, 1 / half, 2],
+        [peak, mn, mx, 1 / (0.8 * half), 3, 1 / (0.8 * half), 3],
     ])
-    lower = np.array([s["t_min"], 0.0,    0.0,    1e-4, 0.5, 1e-4, 0.5])
-    upper = np.array([s["t_max"], s["mx"], s["mx"] + 0.2, 1.0, 8.0, 1.0, 8.0])
-    return {
-        "p0": p0,
-        "lower": lower,
-        "upper": upper,
-        "names": ["t0", "mn", "mx", "rsp", "a3", "rau", "a5"],
-    }
+    limits = e["limits"]
+    lower = np.array([
+        limits["t0"][0], limits["mn"][0], limits["mx"][0],
+        1 / (1.4 * half), 2, 1 / (1.4 * half), 2,
+    ])
+    upper = np.array([
+        limits["t0"][1], limits["mn"][1], limits["mx"][1],
+        1 / (0.1 * half), 6, 1 / (0.1 * half), 6,
+    ])
+    return _result(
+        prior, lower, upper, ["t0", "mn", "mx", "rsp", "a3", "rau", "a5"]
+    )
 
 
 def init_Gu(y: np.ndarray, t: np.ndarray, w: np.ndarray) -> dict:
-    """
-    Initial parameters and bounds for Gu power-law double-logistic (9 params).
-
-    p = [y0, a1, a2, sos, rsp, eos, rau, c1, c2]   — matching phenofit R.
-    """
-    base = init_Beck(y, t, w)
-    s = _season_stats(y, t, w)
-    t_range = s["t_max"] - s["t_min"]
-    sos0 = s["t_min"] + 0.25 * t_range
-    eos0 = s["t_min"] + 0.75 * t_range
-
-    y0_0  = s["mn"]
-    a1_0  = s["mx"] - s["mn"]   # spring amplitude
-    a2_0  = s["mx"] - s["mn"]   # autumn amplitude (symmetric start)
-
-    p0 = np.array([y0_0, a1_0, a2_0, sos0, 0.1, eos0, 0.1, 1.0, 1.0])
-    lower = np.array([0.0, 0.0, 0.0, s["t_min"], 0.001, sos0, 0.001, 0.1, 0.1])
-    upper = np.array([s["mx"], 1.5, 1.5, eos0, 1.0, s["t_max"], 1.0, 10.0, 10.0])
-    return {
-        "p0": p0,
-        "lower": lower,
-        "upper": upper,
-        "names": ["y0", "a1", "a2", "sos", "rsp", "eos", "rau", "c1", "c2"],
-    }
+    """Initial values for Gu: [y0, a1, a2, sos, rsp, eos, rau, c1, c2]."""
+    e = _init_param(y, t, w)
+    mn, a, doy, k = e["mn"], e["amplitude"], e["doy"], e["k"]
+    prior = np.array([
+        [mn, a, a, doy[0], k, doy[1], k, 2, 2],
+        [
+            mn, a, a, doy[0] + e["t1"], 2 * k,
+            doy[1] - e["t2"], 2 * k, 0.5, 0.5,
+        ],
+        [
+            mn, a, a, doy[0] + e["t1"], 3 * k,
+            doy[1] - e["t2"], 3 * k, 5, 5,
+        ],
+    ])
+    lower, upper = _bounds(
+        e, ["mn", "mx", "mx", "sos", "r", "eos", "r"]
+    )
+    return _result(
+        prior,
+        np.append(lower, [0.0, 0.0]),
+        np.append(upper, [np.inf, np.inf]),
+        ["y0", "a1", "a2", "sos", "rsp", "eos", "rau", "c1", "c2"],
+    )
 
 
 def init_Klos(y: np.ndarray, t: np.ndarray, w: np.ndarray) -> dict:
-    """
-    Initial parameters and bounds for Klos polynomial double-logistic (9 params).
+    """Initial values for phenofit's 13-parameter Klos curve."""
+    e = _init_param(y, t, w)
+    doy, peak = e["doy"], e["doy_mx"]
+    b1, b2, c = e["mn"], 0.0, 0.2 * e["mx"]
+    rate1 = 4.0 / (peak - doy[0])
+    rate2 = 3.2 / (doy[1] - peak)
+    m1 = doy[0] + 0.5 * (peak - doy[0])
+    m2 = peak + 0.5 * (doy[1] - peak)
+    common = [0.0, 0.0, b1, b2, c, rate1, rate2]
+    prior = np.array([
+        common + [m1, m2, 0.5, 0.5, 2, 2],
+        [0, 0, b1, 0.01, 0, rate1, rate2, m1, doy[1], 0.5, 1, 2, 4],
+        common + [doy[0], m2, 0.5, 0.5, 2, 2],
+        common + [m1, doy[1], 0.5, 0.5, 2, 2],
+        common + [doy[0], m2, 0.5, 0.5, 2, 2],
+    ])
+    names = [
+        "a1", "a2", "b1", "b2", "c", "B1", "B2",
+        "m1", "m2", "q1", "q2", "v1", "v2",
+    ]
+    return _result(
+        prior,
+        np.full(13, -np.inf),
+        np.full(13, np.inf),
+        names,
+    )
 
-    p = [a0, a1, a2, sos, rsp, eos, rau, b1, b2]
-    """
-    s = _season_stats(y, t, w)
-    t_range = s["t_max"] - s["t_min"]
-    sos0 = s["t_min"] + 0.25 * t_range
-    eos0 = s["t_min"] + 0.75 * t_range
-
-    p0 = np.array([s["mn"], 0.0, 0.0, sos0, 0.1, eos0, 0.1, 1.0, 1.0])
-    lower = np.array([0.0, -0.1, -0.01, s["t_min"], 0.001, sos0, 0.001, 0.1, 0.1])
-    upper = np.array([1.0, 0.1, 0.01, eos0, 1.0, s["t_max"], 1.0, 10.0, 10.0])
-    return {
-        "p0": p0,
-        "lower": lower,
-        "upper": upper,
-        "names": ["a0", "a1", "a2", "sos", "rsp", "eos", "rau", "b1", "b2"],
-    }
-
-
-# ---------------------------------------------------------------------------
-# Registry
-# ---------------------------------------------------------------------------
 
 INIT_REGISTRY: dict[str, callable] = {
     "Beck": init_Beck,
@@ -220,23 +232,7 @@ INIT_REGISTRY: dict[str, callable] = {
 
 
 def get_init(method: str) -> callable:
-    """
-    Look up an initializer function by method name.
-
-    Parameters
-    ----------
-    method : str
-        One of: 'Beck', 'Elmore', 'Zhang', 'AG', 'Gu', 'Klos'.
-
-    Returns
-    -------
-    callable
-        initializer(y, t, w) → dict with p0, lower, upper, names.
-
-    Raises
-    ------
-    ValueError
-    """
+    """Look up an initializer by phenofit method name."""
     if method not in INIT_REGISTRY:
         raise ValueError(
             f"Unknown method '{method}'. Choose from: {list(INIT_REGISTRY)}"

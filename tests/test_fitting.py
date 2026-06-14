@@ -68,7 +68,13 @@ class TestCurveFunctions:
         self._check(doubleLog_Gu, [0.1, 0.75, 0.75, 90.0, 0.12, 270.0, 0.10, 1.0, 1.0])
 
     def test_Klos(self):
-        self._check(doubleLog_Klos, [0.1, 0.0, 0.0, 90.0, 0.12, 270.0, 0.10, 1.0, 1.0])
+        self._check(
+            doubleLog_Klos,
+            [
+                0.0, 0.0, 0.1, 0.0, 0.2, 0.05, 0.04,
+                100.0, 260.0, 0.5, 0.5, 2.0, 2.0,
+            ],
+        )
 
     def test_Beck_monotone_at_extremes(self):
         y = doubleLog_Beck(T, P_BECK)
@@ -105,7 +111,7 @@ class TestInitParams:
     def test_Zhang(self):    self._run(init_Zhang, self.y, self.t, self.w, 7)
     def test_AG(self):       self._run(init_AG, self.y, self.t, self.w, 7)
     def test_Gu(self):       self._run(init_Gu, self.y, self.t, self.w, 9)
-    def test_Klos(self):     self._run(init_Klos, self.y, self.t, self.w, 9)
+    def test_Klos(self):     self._run(init_Klos, self.y, self.t, self.w, 13)
 
     def test_get_init_registry(self):
         for m in ["Beck", "Elmore", "Zhang", "AG", "Gu", "Klos"]:

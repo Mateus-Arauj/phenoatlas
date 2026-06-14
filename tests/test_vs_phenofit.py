@@ -118,15 +118,13 @@ class TestCurvefitGOF:
     """
     Compare RMSE and R2 from curvefit() against R's get_GOF().
 
-    Optimizer convergence can differ between R (nlminb) and Python
-    (L-BFGS-B), so we use a loose tolerance on GOF metrics rather than
-    exact parameter matching.
+    Optimizer parameters may differ between R and Python, while the fitted
+    quality should remain numerically equivalent.
     """
 
-    # R uses nlminb, Python uses L-BFGS-B — slight optimizer divergence expected.
-    # The formulas are verified correct by evaluating at R's params (exact match).
-    ATOL_RMSE = 1e-2   # within 0.01 RMSE units
-    ATOL_R2   = 0.02   # within 2 % R²
+    # Small optimizer-specific differences are allowed.
+    ATOL_RMSE = 1e-3
+    ATOL_R2   = 1e-3
 
     def setup_method(self):
         t, y, w = input_data()
@@ -151,6 +149,7 @@ class TestCurvefitGOF:
     def test_Zhang(self):  self._cmp_method("Zhang")
     def test_AG(self):     self._cmp_method("AG")
     def test_Gu(self):     self._cmp_method("Gu")
+    def test_Klos(self):   self._cmp_method("Klos")
 
 
 # ---------------------------------------------------------------------------
@@ -159,11 +158,10 @@ class TestCurvefitGOF:
 
 class TestPhenology:
     """
-    Compare TRS / DER phenology dates against R reference.
-    DOY tolerance = 5 days (optimizer + smoothing differences).
+    Compare all phenology dates against the R reference.
     """
 
-    DOY_ATOL = 5.0
+    DOY_ATOL = 0.1
 
     def setup_method(self):
         from phenoatlas.phenology.extraction import get_pheno
@@ -221,3 +219,18 @@ class TestPhenology:
         eos_r = float(ref["DER.EOS"].iloc[0])
         eos_py = float(self.row["DER.EOS"])
         assert abs(eos_py - eos_r) <= self.DOY_ATOL
+
+    def test_GU(self):
+        ref = load("pheno_gu.csv").iloc[0]
+        for name in ("UD", "SD", "DD", "RD"):
+            assert abs(float(self.row[name]) - float(ref[name])) <= self.DOY_ATOL
+
+    def test_ZHANG(self):
+        ref = load("pheno_zhang.csv").iloc[0]
+        for name in ("GreenUp", "Maturity", "Senescence", "Dormancy"):
+            py_value = float(self.row[name])
+            r_value = float(ref[name])
+            if np.isnan(r_value):
+                assert np.isnan(py_value)
+            else:
+                assert abs(py_value - r_value) <= self.DOY_ATOL

@@ -54,6 +54,8 @@ def doubleLog_Beck(t: ArrayLike, p: ArrayLike) -> np.ndarray:
     t = np.asarray(t, dtype=float)
     p = np.asarray(p, dtype=float)
     mn, mx, sos, rsp, eos, rau = p
+    if not np.all(np.isfinite(p)) or eos < sos:
+        return np.full_like(t, 99.0)
     amplitude = mx - mn
     spring = 1.0 / (1.0 + np.exp(np.clip(-rsp * (t - sos), -_EXP_MAX, _EXP_MAX)))
     autumn = 1.0 / (1.0 + np.exp(np.clip(rau * (t - eos), -_EXP_MAX, _EXP_MAX)))
@@ -119,6 +121,8 @@ def doubleLog_Zhang(t: ArrayLike, p: ArrayLike) -> np.ndarray:
     t = np.asarray(t, dtype=float)
     p = np.asarray(p, dtype=float)
     t0, mn, mx, sos, rsp, eos, rau = p
+    if t0 - sos <= 1.0 or t0 - eos >= -1.0:
+        return np.full_like(t, 99.0)
     amplitude = mx - mn
     growth = mn + amplitude / (
         1.0 + np.exp(np.clip(-rsp * (t - sos), -_EXP_MAX, _EXP_MAX))
@@ -214,26 +218,24 @@ def doubleLog_Gu(t: ArrayLike, p: ArrayLike) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Klos et al. (2018) — 9 parameters (polynomial baseline)
+# Klos et al. (2018) — 13 parameters
 # ---------------------------------------------------------------------------
 
 def doubleLog_Klos(t: ArrayLike, p: ArrayLike) -> np.ndarray:
     """
-    Klos et al. double-logistic with quadratic polynomial baseline.
+    Klos et al. double-logistic with linear background and quadratic amplitude.
 
-    VI = (a0 + a1·t + a2·t²)
-         + (1 − a0 − a1·t − a2·t²) · [L_spring + L_autumn − 1]
+    This is the 13-parameter formulation used by phenofit:
 
-    where L_spring, L_autumn follow Gu formulation.
-
-    Note: Prone to non-convergence. Use Beck or Elmore as first choice.
+    VI = (a1*t + b1) + (a2*t² + b2*t + c)
+         * ((1 + q1*exp(-B1*(t-m1)))^-v1
+            - (1 + q2*exp(-B2*(t-m2)))^-v2)
 
     Parameters
     ----------
     t : array-like of shape (n,)
-    p : array-like of shape (9,)
-        [a0, a1, a2, sos, rsp, eos, rau, b1, b2]
-        - a0, a1, a2 : polynomial baseline coefficients
+    p : array-like of shape (13,)
+        [a1, a2, b1, b2, c, B1, B2, m1, m2, q1, q2, v1, v2]
 
     Returns
     -------
@@ -241,16 +243,19 @@ def doubleLog_Klos(t: ArrayLike, p: ArrayLike) -> np.ndarray:
     """
     t = np.asarray(t, dtype=float)
     p = np.asarray(p, dtype=float)
-    a0, a1, a2, sos, rsp, eos, rau, b1, b2 = p
-    baseline = a0 + a1 * t + a2 * t**2
-    amplitude = 1.0 - baseline
-    spring = (
-        1.0 / (1.0 + np.exp(np.clip(-rsp * (t - sos), -_EXP_MAX, _EXP_MAX)))
-    ) ** b1
-    autumn = (
-        1.0 / (1.0 + np.exp(np.clip(rau * (t - eos), -_EXP_MAX, _EXP_MAX)))
-    ) ** b2
-    return baseline + amplitude * (spring + autumn - 1.0)
+    a1, a2, b1, b2, c, B1, B2, m1, m2, q1, q2, v1, v2 = p
+    background = a1 * t + b1
+    amplitude = a2 * t**2 + b2 * t + c
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        spring = (
+            1.0
+            + q1 * np.exp(np.clip(-B1 * (t - m1), -_EXP_MAX, _EXP_MAX))
+        ) ** (-v1)
+        autumn = (
+            1.0
+            + q2 * np.exp(np.clip(-B2 * (t - m2), -_EXP_MAX, _EXP_MAX))
+        ) ** (-v2)
+    return background + amplitude * (spring - autumn)
 
 
 # ---------------------------------------------------------------------------
