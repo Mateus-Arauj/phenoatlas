@@ -83,9 +83,15 @@ class TestSeasonMov:
 
     def test_detects_seasons(self):
         t, y = make_annual_series(n_years=2, npt=23)
-        # len_min=5 avoids filtering out short synthetic segments
-        seasons = season_mov(y, t, nptperyear=23, lam=100, iters=1, len_min=5)
-        assert len(seasons) >= 1
+        # Default len_min scales with nptperyear so MODIS 16-day seasons are kept
+        seasons = season_mov(y, t, nptperyear=23, lam=100, iters=1)
+        assert len(seasons) >= 2
+
+    def test_datetime_date_objects_supported(self):
+        dates = pd.date_range("2020-01-01", periods=23 * 2, freq="16D").date
+        _, y = make_annual_series(n_years=2, npt=23)
+        seasons = season_mov(y, dates, nptperyear=23, lam=100, iters=1)
+        assert len(seasons) >= 2
 
     def test_season_dict_keys(self):
         t, y = make_annual_series(n_years=1, npt=46)
@@ -178,6 +184,16 @@ class TestCheckSeason:
         y_flat = np.ones(46) * 0.5
         season = {"idx_start": 0, "idx_end": 45}
         assert not check_season(season, y_flat, amp_min=0.2)
+
+    def test_negative_ndvi_allowed_and_weights_enforced(self):
+        y = np.linspace(-0.2, 0.4, 46)
+        season = {"idx_start": 0, "idx_end": 45}
+        assert check_season(season, y, len_min=10, coverage_min=0.9)
+        w_mostly_zero = np.zeros(46)
+        w_mostly_zero[:5] = 1.0
+        assert not check_season(
+            season, y, w=w_mostly_zero, len_min=10, coverage_min=0.5
+        )
 
 
 class TestFilterSeasons:

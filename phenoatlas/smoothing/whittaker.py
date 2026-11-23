@@ -103,10 +103,14 @@ def _vcurve_lambda(
     log_rss = np.array(log_rss)
     log_pen = np.array(log_pen)
 
-    # V-curve: find the vertex (minimum distance from origin in log-log space)
-    dist = np.sqrt(log_rss**2 + log_pen**2)
+    if len(lam_range) < 2:
+        return float(lam_range[0])
+
+    # V-curve (Frasso & Eilers, 2015): minimum Euclidean step distance
+    # along the L-curve (log_rss, log_pen) across log-spaced lambdas.
+    dist = np.sqrt(np.diff(log_rss) ** 2 + np.diff(log_pen) ** 2)
     best_idx = int(np.argmin(dist))
-    return float(lam_range[best_idx])
+    return float(np.sqrt(lam_range[best_idx] * lam_range[best_idx + 1]))
 
 
 # ---------------------------------------------------------------------------
@@ -177,13 +181,10 @@ def smooth_whit(
     w_cur = w0.copy()
 
     z = y.copy()
-    for _ in range(max(1, iters)):
+    n_iters = max(1, iters)
+    for step in range(n_iters):
         z = whit2(y, lam, w_cur)
-        if iters > 1:
-            w_cur = update_w(y, z, w0)
-            # Enforce envelope: smoothed value cannot go below original weight mask
-            if ylu is not None:
-                lo, hi = ylu
-                w_cur = np.where((z < lo) | (z > hi), 0.0, w_cur)
+        if step < n_iters - 1:
+            w_cur = update_w(y, z, w_cur)
 
     return z

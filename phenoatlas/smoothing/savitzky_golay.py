@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import ArrayLike
-from scipy.signal import savgol_filter
 
 from phenoatlas.smoothing.weights import get_wfun
 from phenoatlas.utils.validation import check_input
@@ -97,12 +96,12 @@ def smooth_sg(
     w_cur = w0.copy()
 
     z = y.copy()
-    for _ in range(max(1, iters)):
-        # Weighted least-squares SG: apply scipy's savgol with per-point weights
-        # We implement a simple weighted version via explicit polynomial fitting
+    n_iters = max(1, iters)
+    for step in range(n_iters):
+        # Weighted least-squares SG via explicit polynomial fitting
         z = _weighted_sg(y, w_cur, frame, degree)
-        if iters > 1:
-            w_cur = update_w(y, z, w0)
+        if step < n_iters - 1:
+            w_cur = update_w(y, z, w_cur)
 
     return z
 
@@ -133,7 +132,6 @@ def _weighted_sg(
     n = len(y)
     half = frame // 2
     z = np.empty(n)
-    x_centre = np.arange(-half, half + 1, dtype=float)
 
     for i in range(n):
         i0 = max(0, i - half)
@@ -143,8 +141,8 @@ def _weighted_sg(
         y_local = y[i0:i1]
         w_local = w[i0:i1]
 
-        if w_local.sum() < degree + 1:
-            # Fall back to weighted mean when not enough data
+        if np.count_nonzero(w_local > 0) < degree + 1:
+            # Fall back to weighted mean when not enough positive-weight data
             denom = w_local.sum()
             z[i] = np.dot(w_local, y_local) / denom if denom > 0 else y[i]
             continue

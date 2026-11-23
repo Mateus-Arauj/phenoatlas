@@ -75,10 +75,12 @@ class TestSmoothWhit:
         assert not np.any(np.isnan(z))
 
     def test_auto_lambda(self):
-        _, y = make_season()
+        _, y = make_season(noise=0.05)
         z = smooth_whit(y, nptperyear=23, lam=None)
         assert z.shape == y.shape
         assert not np.any(np.isnan(z))
+        # V-curve selected lambda should reduce total variation
+        assert np.sum(np.abs(np.diff(z))) < np.sum(np.abs(np.diff(y)))
 
     def test_with_weights(self):
         _, y = make_season()
@@ -132,6 +134,14 @@ class TestSmoothSg:
         _, y = make_season()
         z = smooth_sg(y, nptperyear=23, frame=7)
         assert z.shape == y.shape
+
+    def test_uniform_fractional_weights_preserve_polynomial(self):
+        x = np.linspace(-1.0, 1.0, 21)
+        y = 0.2 + 0.5 * x**2
+        w = np.full_like(y, 0.5)
+        z = smooth_sg(y, w=w, frame=9, degree=4, iters=1)
+        # Uniform 0.5 weights should still fit degree-4 polynomial, not mean fallback
+        np.testing.assert_allclose(z, y, atol=1e-10)
 
 
 # ---------------------------------------------------------------------------

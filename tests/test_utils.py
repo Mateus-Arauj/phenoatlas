@@ -187,6 +187,16 @@ class TestGof:
         metrics = gof(y_obs, y_pred)
         assert metrics["RMSE"] > 0
 
+    def test_weighted_r2_respects_weights(self):
+        y_obs = np.array([0.0, 1.0, 2.0, 3.0, 10.0])
+        y_pred = np.array([0.0, 1.0, 2.0, 3.0, 0.0])
+        w_unweighted = np.ones(5)
+        w_downweighted = np.array([1.0, 1.0, 1.0, 1.0, 1e-4])
+        r2_unw = gof(y_obs, y_pred, w_unweighted)["R2"]
+        r2_w = gof(y_obs, y_pred, w_downweighted)["R2"]
+        assert r2_w > 0.99
+        assert r2_w > r2_unw
+
 
 class TestR2Sign:
     def test_good_fit(self):
@@ -194,6 +204,11 @@ class TestR2Sign:
         y = t**2
         r2 = r2_sign(y, y + 0.01 * np.random.randn(20))
         assert r2 > 0.9
+
+    def test_bad_fit_is_negative(self):
+        y_obs = np.array([1.0, 2.0, 3.0, 4.0])
+        y_pred = np.array([10.0, 10.0, 10.0, 10.0])
+        assert r2_sign(y_obs, y_pred) < 0.0
 
 
 class TestCvCoef:

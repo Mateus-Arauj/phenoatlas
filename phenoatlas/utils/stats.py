@@ -64,16 +64,19 @@ def gof(
     w_sum = w.sum()
     residuals = y_pred - y_obs
 
-    # Weighted mean of observed values
+    # Weighted mean of observed and predicted values
     obs_mean = np.dot(w, y_obs) / w_sum
+    pred_mean = np.dot(w, y_pred) / w_sum
 
     # Weighted SS
     ss_res = np.dot(w, residuals**2)
     ss_tot = np.dot(w, (y_obs - obs_mean) ** 2)
+    ss_pred = np.dot(w, (y_pred - pred_mean) ** 2)
 
     rmse = np.sqrt(ss_res / w_sum)
-    if ss_tot > 0 and np.std(y_pred) > 0:
-        r2 = float(np.corrcoef(y_obs, y_pred)[0, 1] ** 2)
+    if ss_tot > 0 and ss_pred > 0:
+        cov = np.dot(w, (y_obs - obs_mean) * (y_pred - pred_mean))
+        r2 = float((cov**2) / (ss_tot * ss_pred))
     else:
         r2 = np.nan
     nse = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
@@ -103,7 +106,7 @@ def r2_sign(y_obs: ArrayLike, y_pred: ArrayLike, w: ArrayLike | None = None) -> 
     -------
     float
     """
-    return gof(y_obs, y_pred, w)["R2"]
+    return gof(y_obs, y_pred, w)["NSE"]
 
 
 def cv_coef(y_obs: ArrayLike, y_pred: ArrayLike, w: ArrayLike | None = None) -> float:

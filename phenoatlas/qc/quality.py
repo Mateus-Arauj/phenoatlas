@@ -88,6 +88,8 @@ def qc_modis_vi_detailed(
     """
     qc = np.asarray(qc, dtype=np.uint16)
 
+    # SummaryQA (bits 0–1): 0=good, 1=marginal, 2=snow/ice, 3=cloudy
+    summary = qc & 0b11
     # VI usefulness (bits 2–5): 0=highest, 12=not useful, 13=not produced
     usefulness = (qc >> 2) & 0b1111
     # Aerosol quality (bits 6–7): 0=climatology, 1=low, 2=average, 3=high
@@ -107,6 +109,7 @@ def qc_modis_vi_detailed(
         np.where(usefulness <= 10, 0.5, 0.0)))
 
     # Penalize for aerosol, clouds, snow
+    w = np.where((summary == 2) | (summary == 3), 0.0, w)
     w = np.where(aerosol == 3, w * 0.5, w)
     w = np.where(adj_cloud == 1, w * 0.7, w)
     w = np.where(mixed_cloud == 1, w * 0.5, w)
@@ -148,6 +151,7 @@ def qc_modis_lai(
     scf_main = (qc & 0b1) == 0          # bit 0: main algorithm
     scf_good = ((qc >> 1) & 0b111) == 0  # bits 1-3: best quality
     not_produced = (qc >> 5) & 1
+    extra_qc = (qc >> 6) & 1
     snow = (qc >> 7) & 1
 
     w = np.where(
@@ -155,6 +159,7 @@ def qc_modis_lai(
         np.where(scf_main & scf_good, 1.0,
         np.where(scf_main, 0.7, 0.5))
     )
+    w = np.where(extra_qc == 1, w * 0.7, w)
     return w.astype(float)
 
 
@@ -196,7 +201,7 @@ def qc_sentinel2(
     Returns
     -------
     np.ndarray of float
-        Weights: 1.0 = vegetation/bare, 0.0 = cloud/shadow/snow/water.
+        Weights: 1.0 = vegetation/bare, 0.5 = water, 0.0 = cloud/shadow/snow.
     """
     scl = np.asarray(scl, dtype=np.uint8)
     w = np.zeros(scl.shape, dtype=float)

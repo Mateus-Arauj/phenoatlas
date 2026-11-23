@@ -197,3 +197,13 @@ class TestGetPheno:
     def test_invalid_input_raises(self):
         with pytest.raises(TypeError):
             get_pheno("not_a_fitting_result")
+
+    def test_dense_tout_recovers_steep_winter_crop_eos(self):
+        t = np.linspace(1, 365, 46)
+        p_winter = np.array([0.08, 0.80, 65.0, 0.18, 175.0, 0.20])
+        y = doubleLog_Beck(t, p_winter)
+        tout_daily = np.arange(1, 366, dtype=float)
+        fit = curvefit(y, t, tout=tout_daily, methods=["Beck"])
+        df = get_pheno(fit, methods=["TRS", "DER"])
+        assert abs(df.iloc[0]["TRS5.EOS"] - 175.0) <= 5.0
+        assert abs(df.iloc[0]["DER.EOS"] - 175.0) <= 5.0

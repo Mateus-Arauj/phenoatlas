@@ -104,8 +104,8 @@ def season_mov(
     smooth_method: str = "whittaker",
     lam: float | None = None,
     iters: int = 2,
-    len_min: int = 45,
-    len_max: int = 650,
+    len_min: int | None = None,
+    len_max: int | None = None,
     r_max: float = 0.1,
     r_min: float = 0.1,
     calendar_year: bool = False,
@@ -134,8 +134,9 @@ def season_mov(
         Smoothing lambda. None = auto via V-curve.
     iters : int
         Smoothing iterations.
-    len_min, len_max : int
-        Minimum / maximum season length in time-point units (not days).
+    len_min, len_max : int or None
+        Minimum / maximum season length in time-point units (indices).
+        If None, defaults scale with ``nptperyear`` (approx. 45–650 days).
     r_max, r_min : float
         Amplitude thresholds for peak / trough detection.
     calendar_year : bool
@@ -152,11 +153,26 @@ def season_mov(
         'peak_idx'   : int or None — index of detected peak
         'peak_t'     : float or datetime or None
     """
-    y_arr, t_num, w_arr = check_input(y, t, w, nptperyear=nptperyear)
-
-    # Convert t to numeric if datetime-like
     t_orig = np.asarray(t)
-    t_is_dt = np.issubdtype(t_orig.dtype, np.datetime64) or hasattr(t_orig[0], "day")
+    t_is_dt = (
+        t_orig.size > 0
+        and (
+            np.issubdtype(t_orig.dtype, np.datetime64)
+            or hasattr(t_orig[0], "day")
+        )
+    )
+    if t_is_dt:
+        t_dt = pd.DatetimeIndex(pd.to_datetime(t_orig))
+        t_for_check = (t_dt - t_dt[0]).total_seconds().to_numpy() / 86400.0
+    else:
+        t_for_check = t_orig
+
+    y_arr, t_num, w_arr = check_input(y, t_for_check, w, nptperyear=nptperyear)
+
+    if len_min is None:
+        len_min = max(3, int(round(45.0 * nptperyear / 365.0)))
+    if len_max is None:
+        len_max = max(nptperyear * 2, int(round(650.0 * nptperyear / 365.0)))
 
     # Smooth
     z = _apply_smoother(y_arr, w_arr, nptperyear, smooth_method, lam, iters)
